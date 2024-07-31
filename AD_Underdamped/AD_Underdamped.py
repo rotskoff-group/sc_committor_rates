@@ -1,4 +1,4 @@
-# Application to Ovderdamped Alanine Dipeptide
+# Application to Underdamped Alanine Dipeptide
 import os, math, sys
 import matplotlib
 import matplotlib.pyplot as plt
@@ -69,17 +69,16 @@ class PredictNet(torch.nn.Module):
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 net = PredictNet().to(device)
 optimizer = torch.optim.Adam(net.parameters(), lr = 1e-3)
-
+    
 # Create context
 top = omm_app.GromacsTopFile('topol_vacuum.top')
 gro = omm_app.GromacsGroFile('alanine_dipeptide_vacuum_boxed.gro')
 reporter_system = top.createSystem(nonbondedMethod = omm_app.NoCutoff, constraints = omm_app.HBonds)
-T = 300 * unit.kelvin
-integrator = omm.BrownianIntegrator(T, 1, 0.01*unit.femtosecond)
+T = 300 * unit.kelvin 
+integrator = ommt.integrators.BAOABIntegrator(temperature = T, timestep = 1*unit.femtosecond)
 integrator.setRandomNumberSeed(42)
 platform = omm.Platform.getPlatformByName('OpenCL')
 context = omm.Context(reporter_system, integrator, platform)
-
 
 # Define basin indicator functions
 def in_a(positions):
@@ -104,7 +103,7 @@ C.save_data()
 C = committor_constructor(context, net, optimizer, in_a, in_b, n_reporters = 100)
 for i in range(10000):
     start_time = time.time()
-    C.step(n_reporter_steps = 100, stride = 10, fraction = 0)
+    C.step(n_reporter_steps = 1, stride = 100, fraction = 0)
     C.save_data()
     print(time.time() - start_time)
     
@@ -149,7 +148,7 @@ a_center = np.array([-150, 170])
 other_a_center = np.array([-150, 150])
 b_center = np.array([90, -50])
 
-times = (np.array(C.a_times) + np.array(C.b_times))*1e-8
+times = (np.array(C.a_times) + np.array(C.b_times))*1e-6
 ax1.contourf(X, Y, Z, levels = np.linspace(-5, 30, 30) , cmap = 'mycmap')
 ax1.set_xlabel(r'$\textrm{$\phi$}$', size = 20)
 ax1.set_ylabel(r'$\textrm{$\psi$}$', size = 20)
@@ -160,37 +159,37 @@ ax1.text(-155, 165, r"$\textbf{A}$", zorder = 2, color = 'black')
 ax1.text(86, -55, r"$\textbf{B}$", zorder = 2, color = 'white')
 
 # Subplot 2: On-the-fly Rate Estimates
-
 a_rolling_mean, a_rolling_std = utils.compute_rolling_statistics(np.array(C.a_rate_estimates), 200)
 b_rolling_mean, b_rolling_std = utils.compute_rolling_statistics(np.array(C.b_rate_estimates), 200)
 a_rolling_time, a_rolling_timestd = utils.compute_rolling_statistics(1/np.array(C.a_rate_estimates), 200)
 b_rolling_time, b_rolling_timestd = utils.compute_rolling_statistics(1/np.array(C.b_rate_estimates), 200)
 
 ax2.plot(np.array(times), a_rolling_mean, c = '#1B346C', label = r'$\textrm{Estimated} \quad A \rightarrow B$')
-ax2.plot(np.array(times), np.ones_like(np.array(a_rolling_mean))*(1/31), '--', c = '#1B346C', label = r'$\textrm{Empirical} \quad A \rightarrow B$')
+ax2.plot(np.array(times), np.ones_like(np.array(a_rolling_mean))*(1/310), '--', c = '#1B346C', label = r'$\textrm{Empirical} \quad A \rightarrow B$')
 ax2.fill_between(np.array(times), np.array(a_rolling_mean) - np.array(a_rolling_std), np.array(a_rolling_mean) + np.array(a_rolling_std), color = '#1B346C', alpha = 0.5)
 ax2.plot(np.array(times), b_rolling_mean, c = '#F54B1A', label = r'$\textrm{Estimated} \quad B \rightarrow A$')
-ax2.plot(np.array(times), np.ones_like(np.array(b_rolling_mean))*(1/.3), '--', c = '#F54B1A', label = r'$\textrm{Empirical} \quad B \rightarrow A$')
+ax2.plot(np.array(times), np.ones_like(np.array(b_rolling_mean))*(1/2.66), '--', c = '#F54B1A', label = r'$\textrm{Empirical} \quad B \rightarrow A$')
 ax2.fill_between(np.array(times), np.array(b_rolling_mean) - np.array(b_rolling_std), np.array(b_rolling_mean) + np.array(b_rolling_std), color = '#F54B1A', alpha = 0.5)
 ax2.set_yscale('log')
 ax2.set_ylabel(r'$\textrm{Rate Estimate} \, (\textrm{ns}^{-1})$')
 ax2.set_xlabel(r'$\textrm{Total Sampling Time} \, (\textrm{ns})$')
 ax2.legend()
-ax2.set_ylim(1e-4, 1e6)
+ax2.set_ylim(1e-4, 1e4)
 
 # Subplot 3: Log reaction probability
 ax3.set_xlabel(r'$\textrm{$\phi$}$', size = 20)
 ax3.set_ylabel(r'$\textrm{$\psi$}$', size = 20)
-fig.colorbar(ax3.contourf(X, Y, -D, levels = 15, cmap='mycmap3'), label = r"$- \log(q(1 - q))$", ax = ax3)
+fig.colorbar(ax3.contourf(X, Y, -D, levels = 15, cmap='mycmap3'), label = r"$- \log(q)(1 - q)$", ax = ax3)
 ax3.add_patch(plt.Circle(b_center, 10, linewidth = 2, color = 'black', fill = True))
 ax3.add_patch(plt.Circle(a_center, 10, linewidth = 2, color = 'white', fill = True))
 ax3.text(-155, 165, r"$\textbf{A}$", zorder = 2, color = 'black')
 ax3.text(86, -55, r"$\textbf{B}$", zorder = 2, color = 'white')
 
 # Subplot 4: Bar graph of MFPTs
-a_true_mean = 38
-a_true_std = 3
-b_trues = [0.602, 0.666, .181, .079, .319]
+a_true_mean = 310
+a_true_std = 24
+
+b_trues = [0.2731, 2.4852, 3.3329, 1.2946, 5.9371]
 b_true_mean = np.mean(b_trues)
 b_true_std = np.std(b_trues)/np.sqrt(5)
 
@@ -200,7 +199,7 @@ ax4.bar(1, a_true_mean, width = 0.3, yerr = a_true_std, capsize = 10, edgecolor 
 ax4.bar(2, b_rolling_time[-1], width = 0.3, yerr = b_rolling_timestd[-1], capsize = 10, edgecolor = 'black', label = r'$\textrm{Estimated} \quad B \rightarrow A$', color = '#F54B1A', hatch = '//')
 ax4.bar(2.5, b_true_mean, width = 0.3, yerr = b_true_std, capsize = 10, edgecolor = 'black', label = r'$\textrm{Empirical} \quad B \rightarrow A$', color = '#F54B1A')
 ax4.set_yscale('log')
-ax4.set_ylim(0.01, 1000)
+ax4.set_ylim(0.01, 10000)
 ax4.set_xlim(-0.25, 3)
 ax4.set_ylabel(r'$\textrm{Mean First Passage Time \, (ns)}$')
 ax4.tick_params(
@@ -211,5 +210,5 @@ ax4.tick_params(
     labelbottom=False) 
 ax4.legend()
 
-plt.savefig('AD_Figure_Overdamped.pdf')
+plt.savefig('AD_Figure_Underdamped.pdf')
 plt.show()

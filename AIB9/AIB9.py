@@ -1,4 +1,4 @@
-# Application to Underdamped Alanine Dipeptide
+# Application to AIB9
 import os, math, sys
 import matplotlib
 import matplotlib.pyplot as plt
@@ -16,7 +16,7 @@ import pickle
 torch.set_default_dtype(torch.float64)
 torch.set_default_tensor_type(torch.DoubleTensor)
 torch.manual_seed(42)
-import committor_constructor
+from constructor import committor_constructor
 import utils
 
 # Create committor network
@@ -134,7 +134,7 @@ def in_b(positions):
 
 #Create constructor and run equilibrium simulations
 C = committor_constructor(context, net, optimizer, in_a, in_b, n_reporters = 100)
-C.sample_basins(np.load("AIB9_A_init_positions.npy"), np.load("AIB9_B_init_positions.npy"), n_samples = 10)
+C.sample_basins(np.load("AIB9_A_init_positions.npy"), np.load("AIB9_B_init_positions.npy"), n_samples = 1000)
 C.save_data()
 
 #Collect samples and iterate the committor
