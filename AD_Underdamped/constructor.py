@@ -355,7 +355,7 @@ class committor_constructor:                                                   #
             print(f"Flux out of boundary B: {b_flux}/ns")
             self.a_flux, self.b_flux = a_flux, b_flux
             np.save(self.data_path + "A_flux.npy", np.array([a_flux]))
-            np.save(self.data_path + "B_flux.npy", np.array([a_flux]))
+            np.save(self.data_path + "B_flux.npy", np.array([b_flux]))
             self.n_basin_samples = n_samples
         else:
             print("Equilibrium basin simulations already exist in the data path.")
