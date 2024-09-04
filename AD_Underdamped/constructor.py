@@ -72,7 +72,7 @@ class committor_constructor:                                                   #
         if os.path.isfile(self.data_path + "A_boundary_times.npy"):
             self.has_basin_samples = True
             a_escape_times = np.load(self.data_path + "A_boundary_times.npy")
-            b_escape_times = np.load(self.data_path + "A_boundary_times.npy")
+            b_escape_times = np.load(self.data_path + "B_boundary_times.npy")
             self.n_boundary_samples = len(np.load(self.data_path + "A_boundary_times.npy")) - 1
             self.a_flux = 1/np.mean([a_escape_times[i+1] - a_escape_times[i] for i in range(len(a_escape_times) - 1)])
             self.b_flux = 1/np.mean([b_escape_times[i+1] - b_escape_times[i] for i in range(len(b_escape_times) - 1)])
