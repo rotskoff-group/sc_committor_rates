@@ -501,7 +501,7 @@ def calculate_committor_estimates_iter(xs, net, iter_net, a_center, b_center, cu
     final_a_estimates = torch.mean(a_estimates, axis = 1)
     return final_a_estimates
 
-def flux_sample(net, x, V, beta, gamma, step_size, a_center, b_center, iso_value, basin_cutoff, n_crossings):
+def flux_sample(net, x, V, beta, gamma, step_size, a_center, b_center, basin_cutoff, n_crossings):
     x = a_center.unsqueeze(0)
     n_steps = 0
     crossings = 0
