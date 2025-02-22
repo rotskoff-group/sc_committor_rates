@@ -101,7 +101,7 @@ print(V(grid_input.reshape(-1,2)))
 print(V(grid_input.reshape(-1,2)).size())
 print(X.size())
 V_surface = V(grid_input.reshape((-1, 2))).reshape(X.size())
-true_committor = np.transpose((np.load('../../Research/Notebooks/MB_committor.npy')))
+true_committor = np.transpose((np.load('MB_committor.npy')))
 
 # Calculate Flux out of the basins
 
