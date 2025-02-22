@@ -26,7 +26,7 @@ device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 torch.set_default_dtype(torch.float64)
 torch.set_default_tensor_type(torch.DoubleTensor)
 # Set a deterministic RNG seed
-torch.manual_seed(41)
+torch.manual_seed(42)
 
 # Define our two-channel potential
 
@@ -52,18 +52,17 @@ class CommittorNet(torch.nn.Module):
     def __init__(self, dim):
         super(CommittorNet, self).__init__()
         self.dim = dim
-        block = [torch.nn.Linear(dim, 100),
+        block = [torch.nn.Linear(dim, 50),
                       torch.nn.Tanh(),
-                      torch.nn.Linear(100, 1),]
+                      torch.nn.Linear(50, 1),]
         self.Block = torch.nn.Sequential(*block)
     
     def forward(self, x):
         prediction = self.Block(x)
         return prediction.squeeze()
-print(V(torch.tensor([[0., 0.], [1., 1.]])))
 # Set dynamical parameters for the optimiziation
 k = torch.tensor([100.]).to(device) # The harmonic force constant for umbrella sampling around committor values
-beta = torch.tensor([1.]).to(device) # Inverse kT for our system
+beta = torch.tensor([1.0]).to(device) # Inverse kT for our system
 sampling_beta = torch.tensor([0]).to(device) # We can sample at a higher temperature
 gamma = torch.tensor([1]).to(device) # Friction coefficient for Langevin dynamics
 step_size = torch.tensor([1e-3]).to(device) # The step size for each step of Langevin dynamics
@@ -85,8 +84,8 @@ net = CommittorNet(2).to(device).double()
 print("Initial representation of the committor has been trained!")
 
 # Run the optimization
-n_trials = 10
-n_opt_steps = 1000
+n_trials = 1
+n_opt_steps = 3000
 optimizer = torch.optim.Adam(net.parameters(), lr = 1e-2)
 xs = init_data.to(device)
 us = torch.linspace(0, 1, n_windows).to(device)
@@ -104,54 +103,43 @@ print(X.size())
 V_surface = V(grid_input.reshape((-1, 2))).reshape(X.size())
 true_committor = np.transpose((np.load('../../Research/Notebooks/MB_committor.npy')))
 
-# Grab our flux calculation results
-a_escape_times = torch.tensor(np.load('MB_escape_times_a.npy')).to(device).double()
-a_escape_confs = torch.tensor(np.load('MB_escape_confs_a.npy')).to(device).double()
-b_escape_times = torch.tensor(np.load('MB_escape_times_b.npy')).to(device).double()
-b_escape_confs = torch.tensor(np.load('MB_escape_confs_b.npy')).to(device).double()
+# Calculate Flux out of the basins
 
-a_escape_confs_list =torch.tensor(np.load('MB_escape_confs_a.npy')).reshape([-1,2]).double()
-b_escape_confs_list =torch.tensor(np.load('MB_escape_confs_b.npy')).reshape([-1,2]).double()
+print("Calculating Flux...")
+a_escape_times, a_escape_confs = sampling.flux_sample(V, beta, gamma, step_size, a_center, b_center, cutoff, 1000, stride = 1)
+b_escape_times, b_escape_confs = sampling.flux_sample(V, beta, gamma, step_size, b_center, a_center, cutoff, 1000, stride = 1)
 
-#print(b_escape_confs)
+a_escape_confs_list = a_escape_confs.clone().reshape([-1,2]).to(device).double().detach()
+b_escape_confs_list = b_escape_confs.clone().reshape([-1,2]).to(device).double().detach()
+
 escape_confs = torch.cat([a_escape_confs, b_escape_confs], axis = 0).reshape(-1,2)
-print(escape_confs.size())
 
-all_xs = None
-all_reporters = None
-all_short_reporters = None
-n_windows = 1
+#torch.manual_seed(2)
 running_a_exit_confs = []
 running_b_exit_confs = []
 a_exit_indices = torch.randperm(len(a_escape_confs_list))
 b_exit_indices = torch.randperm(len(b_escape_confs_list))
-passage_times = []
 a_transit_history = [0]
 b_transit_history = [0]
-for trial in range(1):
-    reg_scheduler = 0.0
+for trial in range(1): # Can run multiple trials, if you'd like
     a_transit = False
     last_a_transit = 0
     b_transit = False
     last_b_transit = 0
-    epsilon = 0.0
     a_means = []
-    a_stds = []
     a_times = []
     b_means = []
-    b_stds = []
     b_times = []
     losses = []
     log_losses = []
-    MFPT_losses = []
-    MFPT_rate_estimates = []
     a_index_counter = 0
     b_index_counter = 0
     for step in range(n_opt_steps):
         optimizer.zero_grad()
         net.zero_grad()
-        
+
         # Sample some configurations
+        
         if step == 0 or a_transit == True:
             a_xs = a_escape_confs_list[a_exit_indices[a_index_counter]]
             a_xs = a_xs.unsqueeze(0)
@@ -159,15 +147,11 @@ for trial in range(1):
             running_a_exit_confs.append(a_xs.numpy())
         
         else:
-            if torch.rand(1) < epsilon:
-                a_indices = torch.randperm(len(a_running_short_reporters.reshape([-1, 2])[last_a_transit:]))[:n_windows]
-            else:
-                a_reporter_energies = V(a_running_short_reporters.reshape([-1,2])[last_a_transit:])
-                a_weights = torch.sigmoid(net(a_running_short_reporters.squeeze().reshape([-1, 2])))[last_a_transit:].detach()
-                a_weights = torch.where(dist(a_running_short_reporters.squeeze().reshape([-1, 2])[last_a_transit:], a_center) < cutoff, 0, a_weights)
-                a_indices = torch.multinomial(a_weights, n_windows)
-                _, a_indices = torch.sort(a_weights, descending = True)
-                a_indices = a_indices[:n_windows]
+            a_reporter_energies = V(a_running_short_reporters.reshape([-1,2])[last_a_transit:])
+            a_weights = torch.sigmoid(net(a_running_short_reporters.squeeze().reshape([-1, 2])))[last_a_transit:].detach()
+            a_weights = torch.where(dist(a_running_short_reporters.squeeze().reshape([-1, 2])[last_a_transit:], a_center) < cutoff, 0, a_weights)
+            _, a_indices = torch.sort(a_weights, descending = True)
+            a_indices = a_indices[:1]
             a_xs = a_running_short_reporters.squeeze().reshape([-1, 2])[last_a_transit:][a_indices]
         
         if step == 0 or b_transit == True:
@@ -176,22 +160,15 @@ for trial in range(1):
             b_transit = False
             running_b_exit_confs.append(b_xs.numpy())
         else:
-            if torch.rand(1) < epsilon:
-                b_indices = torch.randperm(len(b_running_short_reporters.reshape([-1, 2])[last_b_transit:]))[:n_windows]
-            else:
-                b_reporter_energies = V(b_running_short_reporters.reshape([-1,2])[last_b_transit:])
-                b_weights = torch.sigmoid(-net(b_running_short_reporters.squeeze().reshape([-1, 2])))[ last_b_transit:].detach()
-                b_weights = torch.where(dist(b_running_short_reporters.squeeze().reshape([-1, 2])[ last_b_transit:], b_center) < cutoff, 0, b_weights)
-                b_indices = torch.multinomial(b_weights, n_windows)
-                _, b_indices = torch.sort(b_weights, descending = True)
-                b_indices = b_indices[:n_windows]
-                
+            b_reporter_energies = V(b_running_short_reporters.reshape([-1,2])[last_b_transit:])
+            b_weights = torch.sigmoid(-net(b_running_short_reporters.squeeze().reshape([-1, 2])))[ last_b_transit:].detach()
+            b_weights = torch.where(dist(b_running_short_reporters.squeeze().reshape([-1, 2])[ last_b_transit:], b_center) < cutoff, 0, b_weights)
+            _, b_indices = torch.sort(b_weights, descending = True)
+            b_indices = b_indices[:1]
             b_xs = b_running_short_reporters.squeeze().reshape([-1, 2])[last_b_transit:][b_indices]
     
-        a_reporters, a_long_times = sampling.take_reporter_steps(a_xs, V, beta, gamma, step_size, 100, 5, a_center, b_center, cutoff, adaptive = True)
-        b_reporters, b_long_times = sampling.take_reporter_steps(b_xs, V, beta, gamma, step_size, 100, 5, a_center, b_center, cutoff, adaptive = True)
-        a_short_reporters, a_short_times = sampling.take_reporter_steps(a_xs, V, beta, gamma, step_size, 100, 5, a_center, b_center, cutoff, adaptive = True)
-        b_short_reporters, b_short_times = sampling.take_reporter_steps(b_xs, V, beta, gamma, step_size, 100, 5, a_center, b_center, cutoff, adaptive = True)
+        a_short_reporters, a_short_times = sampling.take_reporter_steps(a_xs, V, beta, gamma, step_size, n_reporter_trajectories, n_reporter_steps, a_center, b_center, cutoff, adaptive = True)
+        b_short_reporters, b_short_times = sampling.take_reporter_steps(b_xs, V, beta, gamma, step_size, n_reporter_trajectories, n_reporter_steps, a_center, b_center, cutoff, adaptive = True)
         a_times.append(np.mean(a_short_times))
         b_times.append(np.mean(b_short_times))
 
@@ -200,18 +177,12 @@ for trial in range(1):
             a_running_xs = a_xs.detach()
             b_running_xs = b_xs.detach()
             running_xs = torch.cat((a_running_xs, b_running_xs), axis = 0)
-            a_running_reporters = a_reporters
-            b_running_reporters = b_reporters
-            running_reporters = torch.cat((a_running_reporters, b_running_reporters), axis = 0)
             a_running_short_reporters = a_short_reporters
             b_running_short_reporters = b_short_reporters
             running_short_reporters = torch.cat((a_running_short_reporters, b_running_short_reporters), axis = 0)
         else:
             a_running_xs = torch.cat((a_running_xs.detach(), a_xs.detach()))
             b_running_xs = torch.cat((b_running_xs.detach(), b_xs.detach()))
-            a_running_reporters = torch.cat((a_running_reporters.detach(), a_reporters), axis = 0)
-            b_running_reporters = torch.cat((b_running_reporters.detach(), b_reporters), axis = 0)
-            running_reporters = torch.cat((a_running_reporters, b_running_reporters), axis = 0)
             a_running_short_reporters = torch.cat((a_running_short_reporters.detach(), a_short_reporters), axis = 0)
             b_running_short_reporters = torch.cat((b_running_short_reporters.detach(), b_short_reporters), axis = 0)
             running_short_reporters = torch.cat((a_running_short_reporters, b_running_short_reporters), axis = 0)
@@ -219,18 +190,7 @@ for trial in range(1):
         
         for j in range(1): # Can go through multiple optimization steps per data collection step, if needed
             with torch.no_grad():
-            # Calculate the target estimates based on the reporter endpoints
-                a_targets, b_targets, a_var, b_var = sampling.calculate_committor_estimates(running_short_reporters.reshape([-1, 2]), net, a_center, b_center, cutoff, 100)
-                a_short_targets, b_short_targets, a_short_var, b_short_var = sampling.calculate_committor_estimates(running_short_reporters.reshape([-1, 2]), net, a_center, b_center, cutoff, 100)
-            indicator = torch.tensor(1)
-            plt.scatter(a_targets, a_var/np.square(a_targets))
-            q_spacings =np.linspace(0.001, 1, 1000)
-            plt.plot(q_spacings, 1000*(1-q_spacings)/(q_spacings*999), linestyle = '--', color = 'black')
-            plt.xscale('log')
-            plt.savefig('biases.pdf')
-            plt.close()
-            np.save('q_means.npy', a_targets)
-            np.save('q_covs.npy', a_var/np.square(a_targets))
+                a_short_targets, b_short_targets, a_short_var, a_short_means = sampling.calculate_committor_estimates(running_short_reporters.reshape([-1, 2]), net, a_center, b_center, cutoff, n_reporter_trajectories)
             batch_size = running_xs.size()[0]
             for m in range(100):
                 permutation = torch.randperm(running_xs.size()[0])
@@ -241,11 +201,11 @@ for trial in range(1):
                     indices = permutation[i:i+batch_size]
                     loss, individual_losses =  1*training.half_loss(net, running_xs.to(device)[indices], a_short_targets.to(device)[indices], b_short_targets.to(device)[indices])
                     log_loss, individual_log_loss = 1*training.half_log_loss(net, running_xs.to(device)[indices], a_short_targets.to(device)[indices], b_short_targets.to(device)[indices], a_short_targets.to(device)[indices], b_short_targets.to(device)[indices])
-
                     total_loss = 0*loss + 1*log_loss
                     total_loss.backward()
                     optimizer.step()
-
+        
+        # Estimate rates
         with torch.no_grad():
             a_exit_tensor = torch.tensor(np.array(a_escape_confs)).squeeze()
             b_exit_tensor = torch.tensor(np.array(b_escape_confs)).squeeze()
@@ -253,13 +213,9 @@ for trial in range(1):
             b_rate_estimates = 1/torch.mean(b_escape_times)*torch.mean(1 - torch.sigmoid(net(b_exit_tensor)))
 
             a_rate_mean = torch.mean(a_rate_estimates)
-            a_rate_std = torch.std(a_rate_estimates)
             a_means.append(a_rate_mean.cpu().detach().numpy())
-            a_stds.append(a_rate_std.cpu().detach().numpy())
             b_rate_mean = torch.mean(b_rate_estimates)
-            b_rate_std = torch.std(b_rate_estimates)
             b_means.append(b_rate_mean.cpu().detach().numpy())
-            b_stds.append(b_rate_std.cpu().detach().numpy())
 
         
         # Report to the command line
@@ -267,12 +223,10 @@ for trial in range(1):
         print(a_index_counter, b_index_counter)
         
 
-        # Generate an updated figure every 10 steps
-        
+        # Check whether or not a sampling chain has reached the basin
         if torch.min(torch.sqrt(torch.sum(torch.square(a_running_short_reporters.reshape([-1, 2])[last_a_transit:] - b_center), axis = -1))) < cutoff:
             print("A Transit!")
             a_transit = True
-            passage_times.append(int((len(a_running_short_reporters.reshape([-1, 2])) - last_a_transit)/1000))
             last_a_transit = len(a_running_short_reporters.reshape([-1, 2]))
             a_index_counter += 1
             a_transit_history.append(int(len(running_xs.reshape([-1, 2]))/2))
@@ -283,8 +237,7 @@ for trial in range(1):
             last_b_transit = len(b_running_short_reporters.reshape([-1, 2]))
             b_index_counter += 1
             b_transit_history.append(int(len(running_xs.reshape([-1, 2]))/2))
-        
-        #if a_transit or b_transit:
+
         if step % 10 == 9:
             plt.tight_layout()
             fig, axs  = plt.subplot_mosaic([['a', 'b', 'c'], ['a', 'b', 'd']], width_ratios = [1., 1., 0.75])
@@ -317,9 +270,9 @@ for trial in range(1):
 
             axs['a'].contourf(X,Y, V_surface.cpu().detach().numpy(), levels = np.linspace(-15, 0, 20), cmap = 'mycmap')
             fig.colorbar(axs['a'].contour(X, Y, torch.sigmoid(net(grid_input)).cpu().detach().numpy(), levels = np.linspace(0.1, 0.9, 9), cmap = 'mycmap2'), ax = axs['a'], ticks = np.linspace(0, 1, 11))
-            #axs['a'].scatter(torch.reshape(running_xs, [-1, 2]).detach().numpy()[:,0], torch.reshape(running_xs, [-1, 2]).detach().numpy()[:,1], color = 'red', alpha = 1)
-            #axs['a'].scatter(torch.reshape(a_running_xs, [-1, 2]).detach().numpy()[-1,0], torch.reshape(a_running_xs, [-1, 2]).detach().numpy()[-1,1], color = 'blue', alpha = 1)
-            #axs['a'].scatter(torch.reshape(b_running_xs, [-1, 2]).detach().numpy()[-1,0], torch.reshape(b_running_xs, [-1, 2]).detach().numpy()[-1,1], color = 'green', alpha = 1)
+            axs['a'].scatter(torch.reshape(running_xs, [-1, 2]).detach().numpy()[:,0], torch.reshape(running_xs, [-1, 2]).detach().numpy()[:,1], color = 'red', alpha = 1)
+            axs['a'].scatter(torch.reshape(a_running_xs, [-1, 2]).detach().numpy()[-1,0], torch.reshape(a_running_xs, [-1, 2]).detach().numpy()[-1,1], color = 'blue', alpha = 1)
+            axs['a'].scatter(torch.reshape(b_running_xs, [-1, 2]).detach().numpy()[-1,0], torch.reshape(b_running_xs, [-1, 2]).detach().numpy()[-1,1], color = 'green', alpha = 1)
             axs['a'].add_patch(plt.Circle((0.5, 0), cutoff, linewidth = 2, color = 'black', fill = True))
             axs['a'].add_patch(plt.Circle((-0.5, 1.5), cutoff, linewidth = 2, color = 'black', fill = True))
             axs['a'].text(-0.54, 1.45, "A", weight = 'bold', size = 15, color = 'white')
@@ -338,18 +291,16 @@ for trial in range(1):
             #axs['b'].plot(np.arange(step+1)*((n_reporter_trajectories*n_reporter_steps).cpu().detach().numpy() + 100)*step_size.cpu().detach().numpy(), np.array(middle_losses), c = 'red')
             #ax2.vlines(1/(9.18e-8*2), 0, 1, color = '#F54B1A', linestyles = 'dashed')
             #ax2.plot(np.linspace(0, 1/(9.18e-8*2), 10), np.ones(10)*9.18e-8*2, '--', c = 'black')
-            axs['b'].plot(np.arange(len(a_means))*2*((n_reporter_trajectories*n_reporter_steps).cpu().detach().numpy() + 1)*step_size.cpu().detach().numpy(), np.ones_like(a_means)*4.3e-6, '--', c = '#1B346C')
-            axs['b'].plot(np.arange(len(a_means))*2*((n_reporter_trajectories*n_reporter_steps).cpu().detach().numpy() + 1)*step_size.cpu().detach().numpy(), np.ones_like(a_means)*3.0e-4, '--', c = '#F54B1A')
-            axs['b'].fill_between(np.arange(len(a_means))*2*((n_reporter_trajectories*n_reporter_steps).cpu().detach().numpy() + 1)*step_size.cpu().detach().numpy(), np.array(a_means) - np.array(a_stds), np.array(a_means) + np.array(a_stds), color = '#1B346C', alpha = 0.5)
-            axs['b'].fill_between(np.arange(len(b_means))*2*((n_reporter_trajectories*n_reporter_steps).cpu().detach().numpy() + 1)*step_size.cpu().detach().numpy(), np.array(b_means) - np.array(b_stds), np.array(b_means) + np.array(b_stds), color = '#F54B1A', alpha = 0.5)
+            axs['b'].plot(np.arange(len(a_means))*2*((n_reporter_trajectories*n_reporter_steps).cpu().detach().numpy() + 1)*step_size.cpu().detach().numpy(), np.ones_like(a_means)*3e-4, '--', c = '#1B346C')
+            axs['b'].plot(np.arange(len(a_means))*2*((n_reporter_trajectories*n_reporter_steps).cpu().detach().numpy() + 1)*step_size.cpu().detach().numpy(), np.ones_like(a_means)*2e-2, '--', c = '#F54B1A')
             axs['b'].set_yscale('log')
-            axs['b'].set_ylim(7e-8, 2)
+            axs['b'].set_ylim(7e-7, 20)
             axs['b'].set_xlabel(r"$\textrm{Sampling Time ($\tau$)}$", size = 12)
             axs['b'].set_ylabel(r"$\textrm{Rate ($\tau^{-1}$)}$", size = 12)
             axs['b'].legend([r'$\textrm{Rate Estimate A to B}$', r'$\textrm{Rate Estimate B to A}$', r'$\textrm{Analytical Rate A to B}$', r'$\textrm{Analytical Rate B to A}$'], prop={'size': 12})
-            axs['b'].text(-20, 1.3e-7, r"\textrm{\textbf{(b)}}", weight = 'bold', size = 20, zorder = 200)
+            #axs['b'].text(-20, 1.3e-7, r"\textrm{\textbf{(b)}}", weight = 'bold', size = 20, zorder = 200)
             plt.tight_layout()
-            fig.savefig("MB_log.pdf")
+            fig.savefig("MB.pdf")
             plt.close()
             
             plt.plot(losses)
@@ -365,4 +316,5 @@ plt.savefig("./Committor_MB.pdf")
 #plt.close()
 print("SAVING")
 torch.save(net.state_dict(), "./MB.pt")
+
 
